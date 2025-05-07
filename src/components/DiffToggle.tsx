@@ -37,7 +37,6 @@ export default function DiffToggle({
   const [isGenerating, setIsGenerating] = useState(false);
   const [notes, setNotes] = useState<Notes | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [partialResponse, setPartialResponse] = useState<string>("");
   const [contentHeight, setContentHeight] = useState<number>(0);
   const [isVisible, setIsVisible] = useState(false);
   const [copiedDev, setCopiedDev] = useState(false);
@@ -120,7 +119,6 @@ export default function DiffToggle({
 
     setIsGenerating(true);
     setError(null);
-    setPartialResponse("");
 
     try {
       const response = await fetch("/api/generate-notes", {
@@ -135,46 +133,42 @@ export default function DiffToggle({
         }),
       });
 
+      // Check if response starts with HTML, which would indicate an error
+      const contentType = response.headers.get("content-type");
+      if (contentType && contentType.includes("text/html")) {
+        const text = await response.text();
+        throw new Error(
+          "Server error occurred. Please check your server logs and ensure your API key is valid."
+        );
+      }
+
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Failed to generate notes");
-      }
-
-      if (!response.body) {
-        throw new Error("Response body is null");
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let accumulatedJSON = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value, { stream: true });
-        accumulatedJSON += chunk;
-        setPartialResponse(accumulatedJSON);
-
-        if (accumulatedJSON.includes("}")) {
-          try {
-            const parsedNotes = JSON.parse(accumulatedJSON);
-            if (parsedNotes.developer && parsedNotes.marketing) {
-              setNotes(parsedNotes);
-            }
-          } catch (e) {
-            // Not valid JSON yet, continue accumulating
-          }
+        try {
+          const errorData = await response.json();
+          throw new Error(errorData.error || "Failed to generate notes");
+        } catch (parseError) {
+          throw new Error(
+            `HTTP error ${response.status}: ${response.statusText}`
+          );
         }
       }
 
+      // Parse the JSON response
       try {
-        const parsedNotes = JSON.parse(accumulatedJSON);
-        setNotes(parsedNotes);
-      } catch (e) {
-        setError("Failed to parse response from AI");
+        const data = await response.json();
+        if (!data.developer || !data.marketing) {
+          throw new Error("Incomplete response from API");
+        }
+
+        setNotes({
+          developer: data.developer,
+          marketing: data.marketing,
+        });
+      } catch (err) {
+        throw new Error("Failed to parse response from API");
       }
     } catch (err) {
+      console.error("Generation error:", err);
       setError(
         err instanceof Error ? err.message : "An unknown error occurred"
       );
@@ -183,28 +177,14 @@ export default function DiffToggle({
     }
   };
 
-  const parsePartialResponse = () => {
-    try {
-      return JSON.parse(partialResponse);
-    } catch (e) {
-      return { developer: "", marketing: "" };
-    }
-  };
-
-  const partialNotes = partialResponse
-    ? parsePartialResponse()
-    : { developer: "", marketing: "" };
-
   const devNotes =
     notes?.developer ||
-    partialNotes.developer ||
     (isGenerating
       ? "Generating..."
       : "Generate notes to see technical details.");
 
   const marketingNotes =
     notes?.marketing ||
-    partialNotes.marketing ||
     (isGenerating
       ? "Generating..."
       : "Generate notes to see user-friendly details.");
@@ -296,7 +276,7 @@ export default function DiffToggle({
                 <h3 className="font-medium text-blue-800 dark:text-blue-300">
                   Developer Notes
                 </h3>
-                {(notes || partialNotes.developer) && !isGenerating && (
+                {notes && !isGenerating && (
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
@@ -322,7 +302,7 @@ export default function DiffToggle({
                 <h3 className="font-medium text-green-800 dark:text-green-300">
                   Marketing Notes
                 </h3>
-                {(notes || partialNotes.marketing) && !isGenerating && (
+                {notes && !isGenerating && (
                   <button
                     onClick={(e) => {
                       e.stopPropagation();

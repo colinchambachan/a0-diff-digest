@@ -179,10 +179,15 @@ export default function Home() {
 
     // Generate sequentially to avoid overloading the API
     for (const generateFn of generateFunctionsRef.current.values()) {
-      await generateFn();
+      try {
+        await generateFn();
 
-      // Small delay between requests to avoid rate limiting
-      await new Promise((resolve) => setTimeout(resolve, 300));
+        // Small delay between requests to avoid rate limiting
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      } catch (error) {
+        console.error("Error generating notes:", error);
+        // Continue with the next PR even if one fails
+      }
     }
 
     setIsGeneratingAll(false);
@@ -197,7 +202,7 @@ export default function Home() {
           href="https://linkedin.com/in/colinchambachan"
           target="_blank"
           rel="noopener noreferrer"
-          className="text-blue-600 hover:text-blue-800 underline"
+          className="text-blue-600 hover:text-blue-800 underline decoration-2 underline-offset-2"
         >
           Colin
         </a>{" "}
