@@ -2,7 +2,13 @@
 
 import { useState, useEffect, useRef } from "react";
 import DiffToggle from "@/components/DiffToggle";
-import { ChevronDown, ChevronUp, ExternalLink, Sparkles } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  ExternalLink,
+  Sparkles,
+  RefreshCw,
+} from "lucide-react";
 
 // Define the expected structure of a diff object
 interface DiffItem {
@@ -33,6 +39,8 @@ export default function Home() {
   const [messagesVisible, setMessagesVisible] = useState(false);
   const [isGeneratingAll, setIsGeneratingAll] = useState(false);
   const [generateButtonVisible, setGenerateButtonVisible] = useState(false);
+  const [generationProgress, setGenerationProgress] = useState(0);
+  const [generationTotal, setGenerationTotal] = useState(0);
 
   // Store references to individual PR generateNotes functions
   const generateFunctionsRef = useRef<Map<string, () => Promise<void>>>(
@@ -167,9 +175,9 @@ export default function Home() {
   };
 
   const handleGenerateAll = async () => {
-    if (isGeneratingAll || generateFunctionsRef.current.size === 0) return;
-
     setIsGeneratingAll(true);
+    setGenerationProgress(0);
+    setGenerationTotal(diffs.length);
 
     // First expand all PRs to show the generation
     if (!allTogglesOpen) {
@@ -177,17 +185,24 @@ export default function Home() {
       setOpenDiffIds(new Set(allIds));
     }
 
-    // Generate sequentially to avoid overloading the API
-    for (const generateFn of generateFunctionsRef.current.values()) {
-      try {
-        await generateFn();
+    // Generate notes for each PR sequentially
+    let completed = 0;
 
-        // Small delay between requests to avoid rate limiting
-        await new Promise((resolve) => setTimeout(resolve, 500));
+    for (const pr of diffs) {
+      try {
+        const generateFn = generateFunctionsRef.current.get(pr.id);
+        if (generateFn) {
+          await generateFn();
+          // Wait a bit between requests to avoid overwhelming the API
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
       } catch (error) {
-        console.error("Error generating notes:", error);
-        // Continue with the next PR even if one fails
+        console.error(`Error generating notes for PR ${pr.id}:`, error);
+        // Continue with the next PR even if this one fails
       }
+
+      completed++;
+      setGenerationProgress(completed);
     }
 
     setIsGeneratingAll(false);
@@ -348,6 +363,15 @@ export default function Home() {
               >
                 Load More (Page {nextPage})
               </button>
+            </div>
+          )}
+
+          {isGeneratingAll && (
+            <div className="mt-4 flex items-center">
+              <RefreshCw className="animate-spin h-5 w-5 mr-2 text-purple-600" />
+              <span>
+                Generating notes: {generationProgress} of {generationTotal}
+              </span>
             </div>
           )}
         </div>

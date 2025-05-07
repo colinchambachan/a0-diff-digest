@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   ChevronRight,
   ChevronDown,
@@ -23,6 +23,11 @@ interface Notes {
   marketing: string;
 }
 
+interface PartialNotes {
+  developer: string;
+  marketing: string;
+}
+
 export default function DiffToggle({
   id,
   description,
@@ -36,19 +41,218 @@ export default function DiffToggle({
   const [internalIsOpen, setInternalIsOpen] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [notes, setNotes] = useState<Notes | null>(null);
+  const [partialNotes, setPartialNotes] = useState<PartialNotes>({
+    developer: "",
+    marketing: "",
+  });
   const [error, setError] = useState<string | null>(null);
   const [contentHeight, setContentHeight] = useState<number>(0);
   const [isVisible, setIsVisible] = useState(false);
   const [copiedDev, setCopiedDev] = useState(false);
   const [copiedMarketing, setCopiedMarketing] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
+
+  // Create separate references for tracking the animation timeout
+  const animationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lastContentRef = useRef<{ dev: string; marketing: string }>({
+    dev: "",
+    marketing: "",
+  });
+
+  // Function to attempt to parse JSON from a string
+  const safeParseJSON = (jsonString: string) => {
+    try {
+      // Try to parse as complete JSON
+      return JSON.parse(jsonString);
+    } catch {
+      try {
+        // If that fails, try to extract JSON objects using regex
+        const jsonMatch = jsonString.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          return JSON.parse(jsonMatch[0]);
+        }
+      } catch {
+        // If all parsing fails, return an empty object
+        console.error("Failed to parse JSON");
+      }
+      return { developer: "", marketing: "" };
+    }
+  };
+
+  const processStreamingChunk = (data: Record<string, unknown>) => {
+    try {
+      if (data.type === "chunk") {
+        // Use the parsed property if available
+        if (data.parsed) {
+          const parsed = data.parsed as Record<string, string>;
+
+          // Store the latest complete content
+          lastContentRef.current = {
+            dev: parsed.developer || lastContentRef.current.dev,
+            marketing: parsed.marketing || lastContentRef.current.marketing,
+          };
+
+          // Force a new object reference to ensure React re-renders
+          setPartialNotes((prevNotes) => ({
+            developer: parsed.developer || prevNotes.developer,
+            marketing: parsed.marketing || prevNotes.marketing,
+          }));
+        } else {
+          // Fall back to parsing fullContent
+          const fullContent = data.fullContent as string;
+          const parsed = safeParseJSON(fullContent);
+
+          // Store the latest complete content
+          lastContentRef.current = {
+            dev: parsed.developer || lastContentRef.current.dev,
+            marketing: parsed.marketing || lastContentRef.current.marketing,
+          };
+
+          // Force a new object reference to ensure React re-renders
+          setPartialNotes((prevNotes) => ({
+            developer: parsed.developer || prevNotes.developer,
+            marketing: parsed.marketing || prevNotes.marketing,
+          }));
+        }
+
+        // Force a re-render of the content height to ensure scrolling works correctly
+        if (animationTimeoutRef.current) {
+          clearTimeout(animationTimeoutRef.current);
+        }
+
+        animationTimeoutRef.current = setTimeout(() => {
+          if (contentRef.current && isOpen) {
+            setContentHeight(contentRef.current.scrollHeight);
+          }
+        }, 10);
+      } else if (data.type === "complete") {
+        // Final complete response
+        try {
+          const content = data.content as string;
+          const finalData = safeParseJSON(content);
+
+          setNotes({
+            developer: finalData.developer || lastContentRef.current.dev,
+            marketing: finalData.marketing || lastContentRef.current.marketing,
+          });
+          setIsGenerating(false);
+
+          // Clean up animation timeout
+          if (animationTimeoutRef.current) {
+            clearTimeout(animationTimeoutRef.current);
+            animationTimeoutRef.current = null;
+          }
+
+          // Close the event source when complete
+          if (eventSourceRef.current) {
+            eventSourceRef.current.close();
+            eventSourceRef.current = null;
+          }
+        } catch {
+          setError("Failed to parse final response");
+          setIsGenerating(false);
+        }
+      } else if (data.type === "error") {
+        throw new Error((data.error as string) || "Unknown error");
+      }
+    } catch (err) {
+      console.error("Failed to process chunk:", err);
+      setError(
+        err instanceof Error ? err.message : "Failed to process response"
+      );
+      setIsGenerating(false);
+
+      // Clean up animation timeout
+      if (animationTimeoutRef.current) {
+        clearTimeout(animationTimeoutRef.current);
+        animationTimeoutRef.current = null;
+      }
+
+      // Close the event source on error
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+    }
+  };
+
+  const generateNotes = useCallback(async () => {
+    if (isGenerating) return;
+
+    setIsGenerating(true);
+    setError(null);
+    setPartialNotes({ developer: "", marketing: "" });
+    lastContentRef.current = { dev: "", marketing: "" };
+    setNotes(null);
+
+    try {
+      // Step 1: Close any existing EventSource
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+
+      // Step 2: Send the diff to the server and get a session ID
+      const response = await fetch("/api/ws", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          prId: id,
+          description,
+          diff,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(
+          errorData.error || "Failed to initiate note generation"
+        );
+      }
+
+      const { sessionId } = await response.json();
+
+      // Step 3: Create an EventSource to stream the generation results
+      const eventSource = new EventSource(
+        `/api/ws?sessionId=${sessionId}&prId=${id}&description=${encodeURIComponent(
+          description
+        )}`
+      );
+      eventSourceRef.current = eventSource;
+
+      eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          processStreamingChunk(data);
+        } catch (err) {
+          console.error("Failed to parse event data:", err);
+        }
+      };
+
+      eventSource.onerror = () => {
+        console.error("EventSource error");
+        eventSource.close();
+        setError("Stream connection error");
+        setIsGenerating(false);
+      };
+    } catch (err) {
+      console.error("Generation error:", err);
+      setError(
+        err instanceof Error ? err.message : "An unknown error occurred"
+      );
+      setIsGenerating(false);
+    }
+  }, [id, description, diff, isGenerating]);
 
   // Register the generate function with the parent component
   useEffect(() => {
     if (onGenerateRef) {
       onGenerateRef(id, generateNotes);
     }
-  }, [id, onGenerateRef]);
+  }, [id, onGenerateRef, generateNotes]);
 
   useEffect(() => {
     const timeout = setTimeout(() => {
@@ -76,6 +280,16 @@ export default function DiffToggle({
     }
   }, [copiedMarketing]);
 
+  // Clean up EventSource on unmount
+  useEffect(() => {
+    return () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+    };
+  }, []);
+
   const isOpen = externalIsOpen !== undefined ? externalIsOpen : internalIsOpen;
 
   useEffect(() => {
@@ -88,7 +302,7 @@ export default function DiffToggle({
     if (contentRef.current && isOpen) {
       setContentHeight(contentRef.current.scrollHeight);
     }
-  }, [isOpen, notes, isGenerating, error]);
+  }, [isOpen, notes, isGenerating, error, partialNotes]);
 
   const handleToggle = () => {
     const newIsOpen = !isOpen;
@@ -114,80 +328,37 @@ export default function DiffToggle({
     }
   };
 
-  const generateNotes = async () => {
-    if (isGenerating) return;
-
-    setIsGenerating(true);
-    setError(null);
-
-    try {
-      const response = await fetch("/api/generate-notes", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          diff,
-          prId: id,
-          description,
-        }),
-      });
-
-      // Check if response starts with HTML, which would indicate an error
-      const contentType = response.headers.get("content-type");
-      if (contentType && contentType.includes("text/html")) {
-        const text = await response.text();
-        throw new Error(
-          "Server error occurred. Please check your server logs and ensure your API key is valid."
-        );
-      }
-
-      if (!response.ok) {
-        try {
-          const errorData = await response.json();
-          throw new Error(errorData.error || "Failed to generate notes");
-        } catch (parseError) {
-          throw new Error(
-            `HTTP error ${response.status}: ${response.statusText}`
-          );
-        }
-      }
-
-      // Parse the JSON response
-      try {
-        const data = await response.json();
-        if (!data.developer || !data.marketing) {
-          throw new Error("Incomplete response from API");
-        }
-
-        setNotes({
-          developer: data.developer,
-          marketing: data.marketing,
-        });
-      } catch (err) {
-        throw new Error("Failed to parse response from API");
-      }
-    } catch (err) {
-      console.error("Generation error:", err);
-      setError(
-        err instanceof Error ? err.message : "An unknown error occurred"
-      );
-    } finally {
-      setIsGenerating(false);
-    }
-  };
-
+  // Ensure that the notes are properly displayed while generating with typewriter effect
   const devNotes =
     notes?.developer ||
+    partialNotes.developer ||
     (isGenerating
       ? "Generating..."
       : "Generate notes to see technical details.");
 
   const marketingNotes =
     notes?.marketing ||
+    partialNotes.marketing ||
     (isGenerating
       ? "Generating..."
       : "Generate notes to see user-friendly details.");
+
+  // Function to display notes with typewriter cursor effect
+  const renderWithTypewriterEffect = (text: string, isGenerating: boolean) => {
+    if (!isGenerating || !text || text === "Generating...") {
+      return text;
+    }
+
+    // Add a blinking cursor effect at the end if still generating
+    return (
+      <>
+        {text}
+        <span className="inline-block animate-pulse ml-0.5 bg-gray-700 dark:bg-gray-300 w-1.5 h-4 align-middle">
+          &nbsp;
+        </span>
+      </>
+    );
+  };
 
   return (
     <div
@@ -276,7 +447,7 @@ export default function DiffToggle({
                 <h3 className="font-medium text-blue-800 dark:text-blue-300">
                   Developer Notes
                 </h3>
-                {notes && !isGenerating && (
+                {(notes || partialNotes.developer) && !isGenerating && (
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
@@ -294,7 +465,7 @@ export default function DiffToggle({
                 )}
               </div>
               <p className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap">
-                {devNotes}
+                {renderWithTypewriterEffect(devNotes, isGenerating)}
               </p>
             </div>
             <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-lg relative group">
@@ -302,7 +473,7 @@ export default function DiffToggle({
                 <h3 className="font-medium text-green-800 dark:text-green-300">
                   Marketing Notes
                 </h3>
-                {notes && !isGenerating && (
+                {(notes || partialNotes.marketing) && !isGenerating && (
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
@@ -320,12 +491,12 @@ export default function DiffToggle({
                 )}
               </div>
               <p className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap">
-                {marketingNotes}
+                {renderWithTypewriterEffect(marketingNotes, isGenerating)}
               </p>
             </div>
           </div>
 
-          {notes && (
+          {(notes || (partialNotes.developer && !isGenerating)) && (
             <div className="mt-4 flex justify-end">
               <button
                 className="px-3 py-1 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded text-sm hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors cursor-pointer"
