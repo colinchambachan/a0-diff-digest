@@ -213,7 +213,7 @@ export default function Home() {
         {/* Controls Section */}
         <div className="mb-8 flex space-x-4">
           <button
-            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors disabled:opacity-50"
+            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors disabled:opacity-50 cursor-pointer"
             onClick={handleFetchClick}
             disabled={isLoading}
           >
@@ -231,7 +231,7 @@ export default function Home() {
             {diffs.length > 0 && (
               <div className="flex space-x-2">
                 <button
-                  className={`flex items-center px-4 py-1.5 text-sm bg-gray-200 dark:bg-gray-700 rounded hover:bg-gray-300 dark:hover:bg-gray-600 transition-all duration-500 ease-in-out ${
+                  className={`flex items-center px-4 py-1.5 text-sm bg-gray-200 dark:bg-gray-700 rounded hover:bg-gray-300 dark:hover:bg-gray-600 transition-all duration-500 ease-in-out cursor-pointer ${
                     expandButtonVisible
                       ? "opacity-100 translate-y-0"
                       : "opacity-0 translate-y-4"
@@ -252,7 +252,7 @@ export default function Home() {
                 </button>
 
                 <button
-                  className={`flex items-center px-4 py-1.5 text-sm bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-70 disabled:hover:bg-purple-600 transition-all duration-500 ease-in-out ${
+                  className={`flex items-center px-4 py-1.5 text-sm bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-70 disabled:hover:bg-purple-600 transition-all duration-500 ease-in-out cursor-pointer ${
                     generateButtonVisible
                       ? "opacity-100 translate-y-0"
                       : "opacity-0 translate-y-4"
@@ -337,7 +337,7 @@ export default function Home() {
           {nextPage && !isLoading && (
             <div className="mt-6">
               <button
-                className={`px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 transition-all duration-500 ease-in-out ${
+                className={`px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 transition-all duration-500 ease-in-out cursor-pointer ${
                   loadMoreButtonVisible
                     ? "opacity-100 translate-y-0"
                     : "opacity-0 translate-y-4"
