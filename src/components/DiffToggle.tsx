@@ -289,10 +289,13 @@ export default function DiffToggle({
       });
 
       // Step 3: Create an EventSource to stream the generation results
+      // Store the diff temporarily in sessionStorage instead of sending in URL
+      sessionStorage.setItem(`diff-${sessionId}`, diff);
+
       const eventSource = new EventSource(
         `/api/ws?sessionId=${sessionId}&prId=${id}&description=${encodeURIComponent(
           description
-        )}&diff=${encodeURIComponent(btoa(diff))}`
+        )}`
       );
       eventSourceRef.current = eventSource;
 

@@ -6,6 +6,9 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || "",
 });
 
+// Simple in-memory store for diffs (would use a real database in production)
+const diffStore = new Map<string, string>();
+
 export const runtime = "edge";
 
 // Define CORS headers
@@ -26,6 +29,7 @@ export async function OPTIONS() {
 // Route to receive the diff content via POST
 export async function POST(request: NextRequest) {
   try {
+    console.log("POST request received");
     const body = await request.json();
     const { prId, description, diff } = body;
 
@@ -42,8 +46,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Generate a session ID but don't store the diff (Edge functions are stateless)
+    // Store the diff for use in streaming
     const sessionId = `${prId}-${Date.now()}`;
+    diffStore.set(sessionId, diff);
+    console.log(
+      `Diff stored with sessionId: ${sessionId}, length: ${diff.length}`
+    );
 
     // Return the sessionId for the client to use in the streaming request
     return new Response(JSON.stringify({ sessionId }), {
@@ -79,7 +87,6 @@ export async function GET(request: NextRequest) {
     const sessionId = searchParams.get("sessionId");
     const prId = searchParams.get("prId");
     const description = searchParams.get("description");
-    const diffBase64 = searchParams.get("diff"); // New parameter to receive diff
 
     if (!sessionId || !prId || !description) {
       console.log("Missing parameters:", { sessionId, prId, description });
@@ -95,9 +102,10 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // If no diff is provided through URL params, return an error
-    if (!diffBase64) {
-      console.log("Diff parameter is missing");
+    // Retrieve the diff from storage
+    const diff = diffStore.get(sessionId);
+    if (!diff) {
+      console.log(`Diff not found for sessionId: ${sessionId}`);
       return new Response(
         JSON.stringify({ error: "Diff not found, please try again" }),
         {
@@ -109,10 +117,9 @@ export async function GET(request: NextRequest) {
         }
       );
     }
-
-    // Decode the base64 diff
-    const diff = atob(diffBase64);
-    console.log("Diff retrieved, length:", diff.length);
+    console.log(
+      `Diff retrieved for sessionId: ${sessionId}, length: ${diff.length}`
+    );
 
     // Set up streaming response
     const encoder = new TextEncoder();
@@ -120,16 +127,24 @@ export async function GET(request: NextRequest) {
     const writer = stream.writable.getWriter();
 
     // Process the generation in the background
-    generateNotes(writer, diff, prId, description).catch((error) => {
-      console.error("Error generating notes:", error);
-      const errorMsg = {
-        type: "error",
-        error:
-          error instanceof Error ? error.message : "Unknown error occurred",
-      };
-      writer.write(encoder.encode(`data: ${JSON.stringify(errorMsg)}\n\n`));
-      writer.close();
-    });
+    generateNotes(writer, diff, prId, description)
+      .catch((error) => {
+        console.error("Error generating notes:", error);
+        const errorMsg = {
+          type: "error",
+          error:
+            error instanceof Error ? error.message : "Unknown error occurred",
+        };
+        writer.write(encoder.encode(`data: ${JSON.stringify(errorMsg)}\n\n`));
+        writer.close();
+
+        // Clean up storage
+        diffStore.delete(sessionId);
+      })
+      .finally(() => {
+        // Clean up storage after streaming completes
+        diffStore.delete(sessionId);
+      });
 
     // Return the stream
     return new Response(stream.readable, {
