@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import DiffToggle from "@/components/DiffToggle";
-import { ChevronDown, ChevronUp, Sparkles } from "lucide-react";
+import { ChevronDown, ChevronUp, ExternalLink, Sparkles } from "lucide-react";
 
 // Define the expected structure of a diff object
 interface DiffItem {
@@ -202,9 +202,10 @@ export default function Home() {
           href="https://linkedin.com/in/colinchambachan"
           target="_blank"
           rel="noopener noreferrer"
-          className="text-blue-600 hover:text-blue-800 underline decoration-2 underline-offset-2"
+          className="text-blue-600 hover:text-blue-800 underline decoration-2 underline-offset-4"
         >
           Colin
+          <ExternalLink className="h-4 w-4 inline-block ms-1" />
         </a>{" "}
         :D
       </h1>
@@ -281,7 +282,7 @@ export default function Home() {
 
           {!initialFetchDone && !isLoading && (
             <p
-              className={`text-gray-600 dark:text-gray-400 transition-all duration-500 ease-in-out ${
+              className={`text-gray-600 dark:text-gray-400 tra  nsition-all duration-500 ease-in-out ${
                 messagesVisible
                   ? "opacity-100 translate-y-0"
                   : "opacity-0 translate-y-4"
