@@ -8,8 +8,20 @@ const openai = new OpenAI({
 
 export const runtime = "edge";
 
-// Simple in-memory store for diffs (would use a real database in production)
-const diffStore = new Map<string, string>();
+// Define CORS headers
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+};
+
+// Handle OPTIONS requests (preflight)
+export async function OPTIONS() {
+  return new Response(null, {
+    status: 204,
+    headers: corsHeaders,
+  });
+}
 
 // Route to receive the diff content via POST
 export async function POST(request: NextRequest) {
@@ -22,30 +34,38 @@ export async function POST(request: NextRequest) {
         JSON.stringify({ error: "Missing required parameters" }),
         {
           status: 400,
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...corsHeaders,
+          },
         }
       );
     }
 
-    // Store the diff for use in streaming
+    // Generate a session ID but don't store the diff (Edge functions are stateless)
     const sessionId = `${prId}-${Date.now()}`;
-    diffStore.set(sessionId, diff);
 
     // Return the sessionId for the client to use in the streaming request
     return new Response(JSON.stringify({ sessionId }), {
       status: 200,
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...corsHeaders,
+      },
     });
   } catch (error) {
-    console.error("Error storing diff:", error);
+    console.error("Error in POST handler:", error);
     return new Response(
       JSON.stringify({
-        error: "Failed to process diff",
+        error: "Failed to process request",
         details: error instanceof Error ? error.message : "Unknown error",
       }),
       {
         status: 500,
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...corsHeaders,
+        },
       }
     );
   }
@@ -54,32 +74,45 @@ export async function POST(request: NextRequest) {
 // Stream the generation results
 export async function GET(request: NextRequest) {
   try {
+    console.log("GET request received");
     const { searchParams } = new URL(request.url);
     const sessionId = searchParams.get("sessionId");
     const prId = searchParams.get("prId");
     const description = searchParams.get("description");
+    const diffBase64 = searchParams.get("diff"); // New parameter to receive diff
 
     if (!sessionId || !prId || !description) {
+      console.log("Missing parameters:", { sessionId, prId, description });
       return new Response(
         JSON.stringify({ error: "Missing required parameters" }),
         {
           status: 400,
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...corsHeaders,
+          },
         }
       );
     }
 
-    // Retrieve the diff from storage
-    const diff = diffStore.get(sessionId);
-    if (!diff) {
+    // If no diff is provided through URL params, return an error
+    if (!diffBase64) {
+      console.log("Diff parameter is missing");
       return new Response(
         JSON.stringify({ error: "Diff not found, please try again" }),
         {
           status: 404,
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...corsHeaders,
+          },
         }
       );
     }
+
+    // Decode the base64 diff
+    const diff = atob(diffBase64);
+    console.log("Diff retrieved, length:", diff.length);
 
     // Set up streaming response
     const encoder = new TextEncoder();
@@ -87,35 +120,29 @@ export async function GET(request: NextRequest) {
     const writer = stream.writable.getWriter();
 
     // Process the generation in the background
-    generateNotes(writer, diff, prId, description)
-      .catch((error) => {
-        console.error("Error generating notes:", error);
-        const errorMsg = {
-          type: "error",
-          error:
-            error instanceof Error ? error.message : "Unknown error occurred",
-        };
-        writer.write(encoder.encode(`data: ${JSON.stringify(errorMsg)}\n\n`));
-        writer.close();
-
-        // Clean up storage
-        diffStore.delete(sessionId);
-      })
-      .finally(() => {
-        // Clean up storage after streaming completes
-        diffStore.delete(sessionId);
-      });
+    generateNotes(writer, diff, prId, description).catch((error) => {
+      console.error("Error generating notes:", error);
+      const errorMsg = {
+        type: "error",
+        error:
+          error instanceof Error ? error.message : "Unknown error occurred",
+      };
+      writer.write(encoder.encode(`data: ${JSON.stringify(errorMsg)}\n\n`));
+      writer.close();
+    });
 
     // Return the stream
     return new Response(stream.readable, {
       headers: {
         "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
+        "Cache-Control": "no-cache, no-transform",
         Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
+        ...corsHeaders,
       },
     });
   } catch (error) {
-    console.error("Error setting up streaming:", error);
+    console.error("Error in GET handler:", error);
     return new Response(
       JSON.stringify({
         error: "Failed to set up streaming",
@@ -123,7 +150,10 @@ export async function GET(request: NextRequest) {
       }),
       {
         status: 500,
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...corsHeaders,
+        },
       }
     );
   }

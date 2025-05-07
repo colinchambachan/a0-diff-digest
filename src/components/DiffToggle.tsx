@@ -292,7 +292,7 @@ export default function DiffToggle({
       const eventSource = new EventSource(
         `/api/ws?sessionId=${sessionId}&prId=${id}&description=${encodeURIComponent(
           description
-        )}`
+        )}&diff=${encodeURIComponent(btoa(diff))}`
       );
       eventSourceRef.current = eventSource;
 
@@ -305,10 +305,10 @@ export default function DiffToggle({
         }
       };
 
-      eventSource.onerror = () => {
-        console.error("EventSource error");
+      eventSource.onerror = (event) => {
+        console.error("EventSource error:", event);
         eventSource.close();
-        setError("Stream connection error");
+        setError("Stream connection error. Please try again.");
         setIsGenerating(false);
         deleteStreamingSession(id); // Clean up on error
       };
