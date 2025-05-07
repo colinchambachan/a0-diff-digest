@@ -9,6 +9,11 @@ import {
   Sparkles,
   RefreshCw,
 } from "lucide-react";
+import { PR, getAllPRs, savePRs, getPRById } from "@/utils/notesStorage";
+
+// Add the storage key constants
+const PR_STORAGE_KEY = "diff-digest-prs";
+const STREAMING_STORAGE_KEY = "diff-digest-streaming";
 
 // Define the expected structure of a diff object
 interface DiffItem {
@@ -16,6 +21,10 @@ interface DiffItem {
   description: string;
   diff: string;
   url: string; // Added URL field
+  _storedNotes?: {
+    developer: string;
+    marketing: string;
+  } | null;
 }
 
 // Define the expected structure of the API response
@@ -41,6 +50,48 @@ export default function Home() {
   const [generateButtonVisible, setGenerateButtonVisible] = useState(false);
   const [generationProgress, setGenerationProgress] = useState(0);
   const [generationTotal, setGenerationTotal] = useState(0);
+
+  // Constants for localStorage keys
+  const PAGINATION_KEY = "diff-digest-pagination";
+
+  // Function to save pagination state
+  const savePaginationState = (
+    currentPage: number,
+    nextPage: number | null
+  ) => {
+    try {
+      if (typeof window === "undefined") return;
+
+      localStorage.setItem(
+        PAGINATION_KEY,
+        JSON.stringify({
+          currentPage,
+          nextPage,
+          timestamp: Date.now(),
+        })
+      );
+    } catch (error) {
+      console.error("Error saving pagination state:", error);
+    }
+  };
+
+  // Function to load pagination state
+  const loadPaginationState = (): {
+    currentPage: number;
+    nextPage: number | null;
+  } | null => {
+    try {
+      if (typeof window === "undefined") return null;
+
+      const storedData = localStorage.getItem(PAGINATION_KEY);
+      if (!storedData) return null;
+
+      return JSON.parse(storedData);
+    } catch (error) {
+      console.error("Error loading pagination state:", error);
+      return null;
+    }
+  };
 
   // Store references to individual PR generateNotes functions
   const generateFunctionsRef = useRef<Map<string, () => Promise<void>>>(
@@ -68,11 +119,21 @@ export default function Home() {
 
   // Fade in the load more button when nextPage becomes available
   useEffect(() => {
-    if (nextPage && !isLoading) {
-      // Add a small delay for a nicer effect
-      const timeout = setTimeout(() => {
-        setLoadMoreButtonVisible(true);
-      }, 500);
+    // Add more detailed logging to debug pagination
+    console.log("Pagination state:", {
+      nextPage,
+      isLoading,
+      loadMoreButtonVisible,
+    });
+
+    if (nextPage) {
+      // Always show the load more button if we have a next page, regardless of loading state
+      const timeout = setTimeout(
+        () => {
+          setLoadMoreButtonVisible(true);
+        },
+        isLoading ? 500 : 0
+      );
       return () => clearTimeout(timeout);
     } else {
       setLoadMoreButtonVisible(false);
@@ -89,6 +150,59 @@ export default function Home() {
       return () => clearTimeout(timeout);
     }
   }, [error, initialFetchDone, isLoading]);
+
+  // Debug nextPage value
+  useEffect(() => {
+    if (nextPage) {
+      console.log("nextPage is set:", nextPage);
+    } else {
+      console.log("nextPage is not set");
+    }
+  }, [nextPage]);
+
+  // Add useEffect to load stored PRs on mount
+  useEffect(() => {
+    // Initial effect to load PRs from localStorage when the app starts
+    const storedPRs = getAllPRs();
+    if (storedPRs.length > 0) {
+      console.log(
+        `Loaded ${storedPRs.length} PRs from localStorage on initial mount`
+      );
+
+      // Convert PR[] to DiffItem[] with _storedNotes property
+      const loadedDiffs: DiffItem[] = storedPRs.map((pr) => ({
+        id: pr.id,
+        description: pr.description,
+        url: pr.url,
+        diff: pr.diff,
+        _storedNotes: pr.notes,
+      }));
+
+      setDiffs(loadedDiffs);
+      setInitialFetchDone(true);
+
+      // Open PRs that had notes generated
+      const prsWithNotes = new Set(
+        storedPRs.filter((pr) => pr.notes !== null).map((pr) => pr.id)
+      );
+
+      if (prsWithNotes.size > 0) {
+        setOpenDiffIds(prsWithNotes);
+      }
+
+      // Always set nextPage to fetch the next batch from the server
+      // This ensures the Load More button is visible
+      setNextPage(1);
+      console.log("Always setting nextPage to allow fetching more PRs");
+
+      // Trigger UI animations
+      setTimeout(() => {
+        setExpandButtonVisible(true);
+        setGenerateButtonVisible(true);
+        setLoadMoreButtonVisible(true);
+      }, 300);
+    }
+  }, []);
 
   const fetchDiffs = async (page: number) => {
     setIsLoading(true);
@@ -111,11 +225,64 @@ export default function Home() {
       }
       const data: ApiResponse = await response.json();
 
-      setDiffs((prevDiffs) =>
-        page === 1 ? data.diffs : [...prevDiffs, ...data.diffs]
-      );
+      // Process the fetched diffs and handle existing PRs
+      const processedDiffs = data.diffs.map((diff) => {
+        // Check if we already have this PR in localStorage
+        const existingPR = getPRById(diff.id);
+        if (existingPR) {
+          // If PR already exists, preserve its notes
+          return {
+            ...diff,
+            _storedNotes: existingPR.notes,
+          };
+        }
+        return diff;
+      });
+
+      // Update the diffs in state, maintaining pagination order
+      setDiffs((prevDiffs) => {
+        if (page === 1) {
+          // For page 1, prioritize new data but preserve existing PRs not in the new response
+          const existingDiffMap = new Map(
+            prevDiffs.map((diff) => [diff.id, diff])
+          );
+          const newDiffMap = new Map(
+            processedDiffs.map((diff) => [diff.id, diff])
+          );
+
+          // Remove any existing diffs that are also in the new response to avoid duplicates
+          const preservedDiffs = prevDiffs.filter(
+            (diff) => !newDiffMap.has(diff.id)
+          );
+
+          // Add processedDiffs at the beginning (top) as they're the newest
+          return [...processedDiffs, ...preservedDiffs];
+        } else {
+          // For subsequent pages, append at the end (bottom) as they're older PRs
+          return [...prevDiffs, ...processedDiffs];
+        }
+      });
+
+      // Store fetched PRs in localStorage
+      const prsToStore: PR[] = processedDiffs.map((diff) => {
+        const existingPR = getPRById(diff.id);
+        return {
+          id: diff.id,
+          description: diff.description,
+          url: diff.url,
+          diff: diff.diff,
+          notes: existingPR?.notes || diff._storedNotes || null,
+          timestamp: Date.now(),
+        };
+      });
+
+      savePRs(prsToStore);
+
+      // Save pagination state
       setCurrentPage(data.currentPage);
       setNextPage(data.nextPage);
+      savePaginationState(data.currentPage, data.nextPage);
+
       if (!initialFetchDone) setInitialFetchDone(true);
     } catch (err: unknown) {
       setError(
@@ -127,20 +294,21 @@ export default function Home() {
   };
 
   const handleFetchClick = () => {
-    setDiffs([]); // Clear existing diffs when fetching the first page again
-    setOpenDiffIds(new Set()); // Reset open diffs when fetching new diffs
-    setExpandButtonVisible(false); // Reset button visibility
-    setLoadMoreButtonVisible(false);
-    setGenerateButtonVisible(false);
+    // Don't clear existing diffs - just update them with new data
+    setIsLoading(true);
+    setError(null);
     setMessagesVisible(false);
     generateFunctionsRef.current.clear();
     fetchDiffs(1);
   };
 
   const handleLoadMoreClick = () => {
-    if (nextPage) {
-      setLoadMoreButtonVisible(false);
-      fetchDiffs(nextPage);
+    if (!isLoading) {
+      const pageToFetch = nextPage || 1;
+      console.log(`Loading more items from page ${pageToFetch}`);
+      fetchDiffs(pageToFetch);
+    } else {
+      console.log("Cannot load more - currently loading");
     }
   };
 
@@ -206,6 +374,45 @@ export default function Home() {
     }
 
     setIsGeneratingAll(false);
+
+    // Refresh diffs with updated notes from localStorage
+    const storedPRs = getAllPRs();
+    if (storedPRs.length > 0) {
+      const refreshedDiffs: DiffItem[] = diffs.map((diff) => {
+        const storedPR = storedPRs.find((pr) => pr.id === diff.id);
+        return {
+          ...diff,
+          _storedNotes: storedPR?.notes || null,
+        };
+      });
+
+      setDiffs(refreshedDiffs);
+    }
+  };
+
+  // Add a clear function to handle resetting all data
+  const handleClearAll = () => {
+    // Clear all localStorage data
+    if (typeof window !== "undefined") {
+      localStorage.removeItem(PR_STORAGE_KEY);
+      localStorage.removeItem(PAGINATION_KEY);
+      localStorage.removeItem(STREAMING_STORAGE_KEY);
+      console.log("Cleared all data from localStorage");
+    }
+
+    // Reset all state
+    setDiffs([]);
+    setOpenDiffIds(new Set());
+    setNextPage(null);
+    setCurrentPage(1);
+    setError(null);
+    setInitialFetchDone(false);
+    setExpandButtonVisible(false);
+    setGenerateButtonVisible(false);
+    setLoadMoreButtonVisible(false);
+    generateFunctionsRef.current.clear();
+
+    console.log("Reset complete - all PRs and state cleared");
   };
 
   return (
@@ -265,6 +472,31 @@ export default function Home() {
                       Expand All
                     </>
                   )}
+                </button>
+
+                <button
+                  className={`flex items-center px-4 py-1.5 text-sm bg-red-600 text-white rounded hover:bg-red-700 transition-all duration-500 ease-in-out cursor-pointer ${
+                    expandButtonVisible
+                      ? "opacity-100 translate-y-0"
+                      : "opacity-0 translate-y-4"
+                  }`}
+                  onClick={handleClearAll}
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    className="h-4 w-4 mr-1.5"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M3 6h18"></path>
+                    <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path>
+                    <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path>
+                  </svg>
+                  Reset All
                 </button>
 
                 <button
@@ -333,6 +565,7 @@ export default function Home() {
                   onToggle={(isOpen) => handleToggleItem(item.id, isOpen)}
                   index={idx}
                   onGenerateRef={registerGenerateFunction}
+                  _storedNotes={item._storedNotes}
                 />
               ))}
             </div>
@@ -350,18 +583,18 @@ export default function Home() {
             </p>
           )}
 
-          {nextPage && !isLoading && (
-            <div className="mt-6">
+          {diffs.length > 0 && (
+            <div className="mt-6 flex justify-center">
               <button
-                className={`px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 transition-all duration-500 ease-in-out cursor-pointer ${
-                  loadMoreButtonVisible
-                    ? "opacity-100 translate-y-0"
-                    : "opacity-0 translate-y-4"
-                }`}
+                className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 transition-colors cursor-pointer"
                 onClick={handleLoadMoreClick}
                 disabled={isLoading}
               >
-                Load More (Page {nextPage})
+                {isLoading
+                  ? "Loading..."
+                  : `Load More (Page ${
+                      nextPage || Math.floor(diffs.length / 10) + 1
+                    })`}
               </button>
             </div>
           )}

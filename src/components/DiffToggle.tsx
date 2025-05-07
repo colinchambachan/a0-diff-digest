@@ -6,6 +6,16 @@ import {
   Copy,
   Check,
 } from "lucide-react";
+import {
+  savePR,
+  getPRById,
+  saveStreamingSession,
+  getStreamingSession,
+  updateStreamingResults,
+  completeStreamingSession,
+  deleteStreamingSession,
+  saveNotesForPR,
+} from "../utils/notesStorage";
 
 interface DiffToggleProps {
   id: string;
@@ -16,6 +26,10 @@ interface DiffToggleProps {
   onToggle?: (isOpen: boolean) => void;
   index?: number;
   onGenerateRef?: (id: string, generateFn: () => Promise<void>) => void;
+  _storedNotes?: {
+    developer: string;
+    marketing: string;
+  } | null;
 }
 
 interface Notes {
@@ -37,10 +51,11 @@ export default function DiffToggle({
   onToggle,
   index = 0,
   onGenerateRef,
+  _storedNotes,
 }: DiffToggleProps) {
   const [internalIsOpen, setInternalIsOpen] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [notes, setNotes] = useState<Notes | null>(null);
+  const [notes, setNotes] = useState<Notes | null>(_storedNotes || null);
   const [partialNotes, setPartialNotes] = useState<PartialNotes>({
     developer: "",
     marketing: "",
@@ -98,6 +113,13 @@ export default function DiffToggle({
             developer: parsed.developer || prevNotes.developer,
             marketing: parsed.marketing || prevNotes.marketing,
           }));
+
+          // Save partial results to localStorage
+          updateStreamingResults(
+            id,
+            parsed.developer || lastContentRef.current.dev,
+            parsed.marketing || lastContentRef.current.marketing
+          );
         } else {
           // Fall back to parsing fullContent
           const fullContent = data.fullContent as string;
@@ -114,6 +136,13 @@ export default function DiffToggle({
             developer: parsed.developer || prevNotes.developer,
             marketing: parsed.marketing || prevNotes.marketing,
           }));
+
+          // Save partial results to localStorage
+          updateStreamingResults(
+            id,
+            parsed.developer || lastContentRef.current.dev,
+            parsed.marketing || lastContentRef.current.marketing
+          );
         }
 
         // Force a re-render of the content height to ensure scrolling works correctly
@@ -132,11 +161,30 @@ export default function DiffToggle({
           const content = data.content as string;
           const finalData = safeParseJSON(content);
 
-          setNotes({
+          const finalNotes = {
             developer: finalData.developer || lastContentRef.current.dev,
             marketing: finalData.marketing || lastContentRef.current.marketing,
-          });
+          };
+
+          setNotes(finalNotes);
           setIsGenerating(false);
+
+          // Save the completed notes to the PR
+          completeStreamingSession(
+            id,
+            finalNotes.developer,
+            finalNotes.marketing
+          );
+
+          // Update the PR record
+          savePR({
+            id,
+            description,
+            url,
+            diff,
+            notes: finalNotes,
+            timestamp: Date.now(),
+          });
 
           // Clean up animation timeout
           if (animationTimeoutRef.current) {
@@ -152,6 +200,7 @@ export default function DiffToggle({
         } catch {
           setError("Failed to parse final response");
           setIsGenerating(false);
+          deleteStreamingSession(id);
         }
       } else if (data.type === "error") {
         throw new Error((data.error as string) || "Unknown error");
@@ -174,6 +223,9 @@ export default function DiffToggle({
         eventSourceRef.current.close();
         eventSourceRef.current = null;
       }
+
+      // Clean up streaming session on error
+      deleteStreamingSession(id);
     }
   };
 
@@ -215,6 +267,28 @@ export default function DiffToggle({
 
       const { sessionId } = await response.json();
 
+      // Save the PR with empty notes if it doesn't exist yet
+      const existingPR = getPRById(id);
+      if (!existingPR) {
+        savePR({
+          id,
+          description,
+          url,
+          diff,
+          notes: null,
+          timestamp: Date.now(),
+        });
+      }
+
+      // Save the initial streaming session to localStorage
+      saveStreamingSession({
+        id,
+        sessionId,
+        partialDeveloper: "",
+        partialMarketing: "",
+        timestamp: Date.now(),
+      });
+
       // Step 3: Create an EventSource to stream the generation results
       const eventSource = new EventSource(
         `/api/ws?sessionId=${sessionId}&prId=${id}&description=${encodeURIComponent(
@@ -237,6 +311,7 @@ export default function DiffToggle({
         eventSource.close();
         setError("Stream connection error");
         setIsGenerating(false);
+        deleteStreamingSession(id); // Clean up on error
       };
     } catch (err) {
       console.error("Generation error:", err);
@@ -244,8 +319,9 @@ export default function DiffToggle({
         err instanceof Error ? err.message : "An unknown error occurred"
       );
       setIsGenerating(false);
+      deleteStreamingSession(id); // Clean up on error
     }
-  }, [id, description, diff, isGenerating]);
+  }, [id, description, diff, url, isGenerating]);
 
   // Register the generate function with the parent component
   useEffect(() => {
@@ -303,6 +379,27 @@ export default function DiffToggle({
       setContentHeight(contentRef.current.scrollHeight);
     }
   }, [isOpen, notes, isGenerating, error, partialNotes]);
+
+  // On mount, check if we have already generated notes for this PR
+  useEffect(() => {
+    // Check if we have notes stored for this PR if not already passed as prop
+    if (!_storedNotes) {
+      const storedPR = getPRById(id);
+      if (storedPR && storedPR.notes) {
+        setNotes(storedPR.notes);
+      }
+    }
+
+    // Check if we have an in-progress streaming session
+    const streamingSession = getStreamingSession(id);
+    if (streamingSession) {
+      // Restore partial notes
+      setPartialNotes({
+        developer: streamingSession.partialDeveloper,
+        marketing: streamingSession.partialMarketing,
+      });
+    }
+  }, [id, _storedNotes]);
 
   const handleToggle = () => {
     const newIsOpen = !isOpen;
