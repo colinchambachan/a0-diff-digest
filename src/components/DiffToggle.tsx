@@ -288,30 +288,84 @@ export default function DiffToggle({
         timestamp: Date.now(),
       });
 
-      // Step 3: Create an EventSource to stream the generation results
-      const eventSource = new EventSource(
-        `/api/ws?sessionId=${sessionId}&prId=${id}&description=${encodeURIComponent(
-          description
-        )}`
-      );
-      eventSourceRef.current = eventSource;
+      // Step 3: Start streaming request using fetch instead of EventSource
+      const streamingResponse = await fetch("/api/ws", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+          "x-streaming-request": "true",
+        },
+        body: JSON.stringify({
+          sessionId,
+          prId: id,
+          description,
+          diff,
+        }),
+      });
 
-      eventSource.onmessage = (event) => {
+      if (!streamingResponse.ok) {
+        const errorData = await streamingResponse.json().catch(() => null);
+        throw new Error(
+          (errorData && errorData.error) ||
+            `Stream request failed: ${streamingResponse.status} ${streamingResponse.statusText}`
+        );
+      }
+
+      // Process the stream
+      const reader = streamingResponse.body?.getReader();
+      if (!reader) {
+        throw new Error("Failed to get reader from response");
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      // Process the stream chunks
+      const processStream = async () => {
         try {
-          const data = JSON.parse(event.data);
-          processStreamingChunk(data);
+          while (true) {
+            const { done, value } = await reader.read();
+
+            if (done) {
+              console.log("Stream completed");
+              break;
+            }
+
+            // Decode the chunk and add to buffer
+            const chunk = decoder.decode(value, { stream: true });
+            buffer += chunk;
+
+            // Process any complete messages in the buffer
+            const messages = buffer.split("\n\n");
+            buffer = messages.pop() || ""; // Keep the last incomplete message in the buffer
+
+            for (const message of messages) {
+              if (message.startsWith("data: ")) {
+                const data = message.slice(6); // Remove "data: " prefix
+                try {
+                  const parsedData = JSON.parse(data);
+                  processStreamingChunk(parsedData);
+                } catch (err) {
+                  console.error("Failed to parse event data:", err, data);
+                }
+              }
+            }
+          }
         } catch (err) {
-          console.error("Failed to parse event data:", err);
+          console.error("Stream reading error:", err);
+          setError(
+            `Stream error: ${
+              err instanceof Error ? err.message : "Unknown error"
+            }`
+          );
+          setIsGenerating(false);
+          deleteStreamingSession(id);
         }
       };
 
-      eventSource.onerror = () => {
-        console.error("EventSource error");
-        eventSource.close();
-        setError("Stream connection error");
-        setIsGenerating(false);
-        deleteStreamingSession(id); // Clean up on error
-      };
+      // Start processing the stream
+      processStream();
     } catch (err) {
       console.error("Generation error:", err);
       setError(

@@ -8,87 +8,94 @@ const openai = new OpenAI({
 
 export const runtime = "edge";
 
-// Simple in-memory store for diffs (would use a real database in production)
-const diffStore = new Map<string, string>();
+// Define CORS headers
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+};
 
-// Route to receive the diff content via POST
-export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json();
-    const { prId, description, diff } = body;
-
-    if (!prId || !description || !diff) {
-      return new Response(
-        JSON.stringify({ error: "Missing required parameters" }),
-        {
-          status: 400,
-          headers: { "Content-Type": "application/json" },
-        }
-      );
-    }
-
-    // Store the diff for use in streaming
-    const sessionId = `${prId}-${Date.now()}`;
-    diffStore.set(sessionId, diff);
-
-    // Return the sessionId for the client to use in the streaming request
-    return new Response(JSON.stringify({ sessionId }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
-  } catch (error) {
-    console.error("Error storing diff:", error);
-    return new Response(
-      JSON.stringify({
-        error: "Failed to process diff",
-        details: error instanceof Error ? error.message : "Unknown error",
-      }),
-      {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      }
-    );
-  }
+// Handle OPTIONS requests (preflight)
+export async function OPTIONS() {
+  return new Response(null, {
+    status: 204,
+    headers: corsHeaders,
+  });
 }
 
-// Stream the generation results
-export async function GET(request: NextRequest) {
+// Combined endpoint to handle both sessionId generation and streaming
+export async function POST(request: NextRequest) {
   try {
-    const { searchParams } = new URL(request.url);
-    const sessionId = searchParams.get("sessionId");
-    const prId = searchParams.get("prId");
-    const description = searchParams.get("description");
+    console.log("POST request received");
 
-    if (!sessionId || !prId || !description) {
-      return new Response(
-        JSON.stringify({ error: "Missing required parameters" }),
-        {
-          status: 400,
-          headers: { "Content-Type": "application/json" },
-        }
+    // Check if this is a streaming request
+    const isStreamingRequest =
+      request.headers.get("x-streaming-request") === "true";
+    console.log("Is streaming request:", isStreamingRequest);
+
+    if (!isStreamingRequest) {
+      // Regular POST request to get sessionId
+      const body = await request.json();
+      const { prId, description, diff } = body;
+
+      if (!prId || !description || !diff) {
+        return new Response(
+          JSON.stringify({ error: "Missing required parameters" }),
+          {
+            status: 400,
+            headers: {
+              "Content-Type": "application/json",
+              ...corsHeaders,
+            },
+          }
+        );
+      }
+
+      // Generate a unique sessionId
+      const sessionId = `${prId}-${Date.now()}`;
+      console.log(`Generated sessionId: ${sessionId} for PR: ${prId}`);
+
+      // Return the sessionId for the client
+      return new Response(JSON.stringify({ sessionId }), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          ...corsHeaders,
+        },
+      });
+    } else {
+      // Handle streaming request
+      console.log("Processing streaming request");
+      const body = await request.json();
+      const { sessionId, prId, description, diff } = body;
+
+      if (!sessionId || !prId || !description || !diff) {
+        console.log("Missing parameters in streaming request");
+        return new Response(
+          JSON.stringify({
+            error: "Missing required parameters for streaming",
+          }),
+          {
+            status: 400,
+            headers: {
+              "Content-Type": "application/json",
+              ...corsHeaders,
+            },
+          }
+        );
+      }
+
+      console.log(
+        `Processing streaming for sessionId: ${sessionId}, diff length: ${diff.length}`
       );
-    }
 
-    // Retrieve the diff from storage
-    const diff = diffStore.get(sessionId);
-    if (!diff) {
-      return new Response(
-        JSON.stringify({ error: "Diff not found, please try again" }),
-        {
-          status: 404,
-          headers: { "Content-Type": "application/json" },
-        }
-      );
-    }
+      // Set up streaming response
+      const encoder = new TextEncoder();
+      const stream = new TransformStream();
+      const writer = stream.writable.getWriter();
 
-    // Set up streaming response
-    const encoder = new TextEncoder();
-    const stream = new TransformStream();
-    const writer = stream.writable.getWriter();
-
-    // Process the generation in the background
-    generateNotes(writer, diff, prId, description)
-      .catch((error) => {
+      // Process the generation in the background
+      generateNotes(writer, diff, prId, description).catch((error) => {
         console.error("Error generating notes:", error);
         const errorMsg = {
           type: "error",
@@ -97,33 +104,32 @@ export async function GET(request: NextRequest) {
         };
         writer.write(encoder.encode(`data: ${JSON.stringify(errorMsg)}\n\n`));
         writer.close();
-
-        // Clean up storage
-        diffStore.delete(sessionId);
-      })
-      .finally(() => {
-        // Clean up storage after streaming completes
-        diffStore.delete(sessionId);
       });
 
-    // Return the stream
-    return new Response(stream.readable, {
-      headers: {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-      },
-    });
+      // Return the stream
+      return new Response(stream.readable, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache, no-transform",
+          Connection: "keep-alive",
+          "X-Accel-Buffering": "no",
+          ...corsHeaders,
+        },
+      });
+    }
   } catch (error) {
-    console.error("Error setting up streaming:", error);
+    console.error("Error in POST handler:", error);
     return new Response(
       JSON.stringify({
-        error: "Failed to set up streaming",
+        error: "Failed to process request",
         details: error instanceof Error ? error.message : "Unknown error",
       }),
       {
         status: 500,
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...corsHeaders,
+        },
       }
     );
   }
@@ -239,25 +245,7 @@ Based on this diff, generate both developer and marketing release notes.`;
             currentMarketingNote = marketingMatch[1];
           }
 
-          // If no matches yet, look for partial matches
-          if (!devMatch) {
-            const partialDevMatch = accumulatedContent.match(
-              /"developer"\s*:\s*"([^"]*)/
-            );
-            if (partialDevMatch && partialDevMatch[1]) {
-              currentDevNote = partialDevMatch[1];
-            }
-          }
-
-          if (!marketingMatch) {
-            const partialMarketingMatch = accumulatedContent.match(
-              /"marketing"\s*:\s*"([^"]*)/
-            );
-            if (partialMarketingMatch && partialMarketingMatch[1]) {
-              currentMarketingNote = partialMarketingMatch[1];
-            }
-          }
-
+          // Send update with extracted field values
           const message = {
             type: "chunk",
             content: content,
@@ -272,31 +260,21 @@ Based on this diff, generate both developer and marketing release notes.`;
             encoder.encode(`data: ${JSON.stringify(message)}\n\n`)
           );
         }
-
-        // Force a flush to ensure data is sent immediately
-        await writer.ready;
       }
     }
 
-    // Send completion message
+    // Final completion message
     const completeMsg = {
       type: "complete",
       content: accumulatedContent,
     };
-
     await writer.write(
       encoder.encode(`data: ${JSON.stringify(completeMsg)}\n\n`)
     );
     await writer.close();
   } catch (error) {
-    // Send error message
-    const errorMsg = {
-      type: "error",
-      error: error instanceof Error ? error.message : "Unknown error",
-    };
-
-    await writer.write(encoder.encode(`data: ${JSON.stringify(errorMsg)}\n\n`));
-    await writer.close();
+    console.error("Error in generateNotes:", error);
+    throw error;
   }
 }
 
