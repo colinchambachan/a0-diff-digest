@@ -14,7 +14,6 @@ import {
   updateStreamingResults,
   completeStreamingSession,
   deleteStreamingSession,
-  saveNotesForPR,
 } from "../utils/notesStorage";
 
 interface DiffToggleProps {

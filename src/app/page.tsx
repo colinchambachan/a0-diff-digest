@@ -75,24 +75,6 @@ export default function Home() {
     }
   };
 
-  // Function to load pagination state
-  const loadPaginationState = (): {
-    currentPage: number;
-    nextPage: number | null;
-  } | null => {
-    try {
-      if (typeof window === "undefined") return null;
-
-      const storedData = localStorage.getItem(PAGINATION_KEY);
-      if (!storedData) return null;
-
-      return JSON.parse(storedData);
-    } catch (error) {
-      console.error("Error loading pagination state:", error);
-      return null;
-    }
-  };
-
   // Store references to individual PR generateNotes functions
   const generateFunctionsRef = useRef<Map<string, () => Promise<void>>>(
     new Map()
@@ -138,7 +120,7 @@ export default function Home() {
     } else {
       setLoadMoreButtonVisible(false);
     }
-  }, [nextPage, isLoading]);
+  }, [nextPage, isLoading, loadMoreButtonVisible]);
 
   // Fade in feedback messages (error, empty state, etc)
   useEffect(() => {
@@ -243,9 +225,6 @@ export default function Home() {
       setDiffs((prevDiffs) => {
         if (page === 1) {
           // For page 1, prioritize new data but preserve existing PRs not in the new response
-          const existingDiffMap = new Map(
-            prevDiffs.map((diff) => [diff.id, diff])
-          );
           const newDiffMap = new Map(
             processedDiffs.map((diff) => [diff.id, diff])
           );
