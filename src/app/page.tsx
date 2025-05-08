@@ -87,6 +87,10 @@ export default function Home() {
   // Determine if all toggles are currently open
   const allTogglesOpen = diffs.length > 0 && openDiffIds.size === diffs.length;
 
+  // Add references for different sections
+  const resultsRef = useRef<HTMLDivElement>(null);
+  const loadMoreRef = useRef<HTMLDivElement>(null);
+
   // Effect to load repo settings from localStorage
   useEffect(() => {
     try {
@@ -283,10 +287,32 @@ export default function Home() {
       savePaginationState(data.currentPage, data.nextPage);
 
       if (!initialFetchDone) setInitialFetchDone(true);
+
+      // Scroll to results section after data is loaded (if it's page 1)
+      if (page === 1) {
+        setTimeout(() => {
+          if (resultsRef.current) {
+            resultsRef.current.scrollIntoView({
+              behavior: "smooth",
+              block: "start",
+            });
+          }
+        }, 100);
+      }
     } catch (err: unknown) {
       setError(
         err instanceof Error ? err.message : "An unknown error occurred"
       );
+
+      // Also scroll to results section to show the error
+      setTimeout(() => {
+        if (resultsRef.current) {
+          resultsRef.current.scrollIntoView({
+            behavior: "smooth",
+            block: "start",
+          });
+        }
+      }, 100);
     } finally {
       setIsLoading(false);
     }
@@ -306,6 +332,16 @@ export default function Home() {
       const pageToFetch = nextPage || 1;
       console.log(`Loading more items from page ${pageToFetch}`);
       fetchDiffs(pageToFetch);
+
+      // Scroll to load more section
+      setTimeout(() => {
+        if (loadMoreRef.current) {
+          loadMoreRef.current.scrollIntoView({
+            behavior: "smooth",
+            block: "end",
+          });
+        }
+      }, 100);
     } else {
       console.log("Cannot load more - currently loading");
     }
@@ -367,6 +403,16 @@ export default function Home() {
       const allIds = diffs.map((item) => item.id);
       setOpenDiffIds(new Set(allIds));
     }
+
+    // Scroll to results area to show generation progress
+    setTimeout(() => {
+      if (resultsRef.current) {
+        resultsRef.current.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+      }
+    }, 100);
 
     // Generate notes for each PR sequentially
     let completed = 0;
@@ -573,7 +619,7 @@ export default function Home() {
                     <path d="M9 21v-6"></path>
                     <path d="M15 15v6"></path>
                     <path d="M4 7V3h16v4"></path>
-                    <path d="M3 7h5l2 2 2-2h5v5l-2 2 2 2v5h-5l-2-2-2 2H3v-5l2-2-2-2Z"></path>
+                    <path d="M3 7h5l2 2 2-2h5v5l-2 2 2 2v5h-5l-2-2-2 2Z"></path>
                   </svg>
                 </div>
                 <select
@@ -717,7 +763,10 @@ export default function Home() {
         </div>
 
         {/* Results Section */}
-        <div className="border border-gray-300 dark:border-gray-700 rounded-lg p-6 min-h-[300px] bg-gray-50 dark:bg-gray-800">
+        <div
+          ref={resultsRef}
+          className="border border-gray-300 dark:border-gray-700 rounded-lg p-6 min-h-[300px] bg-gray-50 dark:bg-gray-800"
+        >
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-2xl font-semibold flex items-center">
               Merged Pull Requests
@@ -868,7 +917,7 @@ export default function Home() {
           )}
 
           {diffs.length > 0 && (
-            <div className="mt-6 flex justify-center">
+            <div ref={loadMoreRef} className="mt-6 flex justify-center">
               <button
                 className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 transition-colors cursor-pointer"
                 onClick={handleLoadMoreClick}
