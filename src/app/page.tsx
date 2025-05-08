@@ -83,10 +83,7 @@ export default function Home() {
   // Determine if all toggles are currently open
   const allTogglesOpen = diffs.length > 0 && openDiffIds.size === diffs.length;
 
-  useEffect(() => {
-    console.log("Current diffs:", diffs);
-  }, [diffs]);
-
+ 
   // Fade in control buttons when diffs are loaded
   useEffect(() => {
     if (diffs.length > 0) {
@@ -101,12 +98,7 @@ export default function Home() {
 
   // Fade in the load more button when nextPage becomes available
   useEffect(() => {
-    // Add more detailed logging to debug pagination
-    console.log("Pagination state:", {
-      nextPage,
-      isLoading,
-      loadMoreButtonVisible,
-    });
+   
 
     if (nextPage) {
       // Always show the load more button if we have a next page, regardless of loading state
@@ -133,15 +125,7 @@ export default function Home() {
     }
   }, [error, initialFetchDone, isLoading]);
 
-  // Debug nextPage value
-  useEffect(() => {
-    if (nextPage) {
-      console.log("nextPage is set:", nextPage);
-    } else {
-      console.log("nextPage is not set");
-    }
-  }, [nextPage]);
-
+  
   // Add useEffect to load stored PRs on mount
   useEffect(() => {
     // Initial effect to load PRs from localStorage when the app starts

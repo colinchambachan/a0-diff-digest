@@ -328,7 +328,6 @@ export default function DiffToggle({
             const { done, value } = await reader.read();
 
             if (done) {
-              console.log("Stream completed");
               break;
             }
 
