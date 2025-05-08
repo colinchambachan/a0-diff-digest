@@ -6,8 +6,9 @@ import {
   ChevronDown,
   ChevronUp,
   ExternalLink,
-  Sparkles,
   RefreshCw,
+  Loader2,
+  Zap,
 } from "lucide-react";
 import { PR, getAllPRs, savePRs, getPRById } from "@/utils/notesStorage";
 
@@ -47,12 +48,15 @@ export default function Home() {
   const [loadMoreButtonVisible, setLoadMoreButtonVisible] = useState(false);
   const [messagesVisible, setMessagesVisible] = useState(false);
   const [isGeneratingAll, setIsGeneratingAll] = useState(false);
-  const [generateButtonVisible, setGenerateButtonVisible] = useState(false);
   const [generationProgress, setGenerationProgress] = useState(0);
   const [generationTotal, setGenerationTotal] = useState(0);
+  const [repoOwner, setRepoOwner] = useState<string>("openai");
+  const [repoName, setRepoName] = useState<string>("openai-node");
+  const [itemsPerPage, setItemsPerPage] = useState<number>(10);
 
   // Constants for localStorage keys
   const PAGINATION_KEY = "diff-digest-pagination";
+  const REPO_SETTINGS_KEY = "diff-digest-repo-settings";
 
   // Function to save pagination state
   const savePaginationState = (
@@ -83,14 +87,48 @@ export default function Home() {
   // Determine if all toggles are currently open
   const allTogglesOpen = diffs.length > 0 && openDiffIds.size === diffs.length;
 
- 
+  // Effect to load repo settings from localStorage
+  useEffect(() => {
+    try {
+      if (typeof window === "undefined") return;
+
+      const storedSettings = localStorage.getItem(REPO_SETTINGS_KEY);
+      if (storedSettings) {
+        const { owner, repo, perPage } = JSON.parse(storedSettings);
+        if (owner) setRepoOwner(owner);
+        if (repo) setRepoName(repo);
+        if (perPage) setItemsPerPage(perPage);
+      }
+    } catch (error) {
+      console.error("Error loading repo settings:", error);
+    }
+  }, []);
+
+  // Function to save repo settings to localStorage
+  const saveRepoSettings = (owner: string, repo: string, perPage: number) => {
+    try {
+      if (typeof window === "undefined") return;
+
+      localStorage.setItem(
+        REPO_SETTINGS_KEY,
+        JSON.stringify({
+          owner,
+          repo,
+          perPage,
+          timestamp: Date.now(),
+        })
+      );
+    } catch (error) {
+      console.error("Error saving repo settings:", error);
+    }
+  };
+
   // Fade in control buttons when diffs are loaded
   useEffect(() => {
     if (diffs.length > 0) {
       // Add a small delay for a nicer effect
       const timeout = setTimeout(() => {
         setExpandButtonVisible(true);
-        setGenerateButtonVisible(true);
       }, 300);
       return () => clearTimeout(timeout);
     }
@@ -98,8 +136,6 @@ export default function Home() {
 
   // Fade in the load more button when nextPage becomes available
   useEffect(() => {
-   
-
     if (nextPage) {
       // Always show the load more button if we have a next page, regardless of loading state
       const timeout = setTimeout(
@@ -125,7 +161,6 @@ export default function Home() {
     }
   }, [error, initialFetchDone, isLoading]);
 
-  
   // Add useEffect to load stored PRs on mount
   useEffect(() => {
     // Initial effect to load PRs from localStorage when the app starts
@@ -164,7 +199,6 @@ export default function Home() {
       // Trigger UI animations
       setTimeout(() => {
         setExpandButtonVisible(true);
-        setGenerateButtonVisible(true);
         setLoadMoreButtonVisible(true);
       }, 300);
     }
@@ -176,7 +210,9 @@ export default function Home() {
     setMessagesVisible(false);
     try {
       const response = await fetch(
-        `/api/sample-diffs?page=${page}&per_page=10`
+        `/api/sample-diffs?page=${page}&per_page=${itemsPerPage}&owner=${encodeURIComponent(
+          repoOwner
+        )}&repo=${encodeURIComponent(repoName)}`
       );
       if (!response.ok) {
         let errorMsg = `HTTP error! status: ${response.status}`;
@@ -298,6 +334,22 @@ export default function Home() {
     }
   };
 
+  // Function to check if current settings differ from stored settings
+  const settingsHaveChanged = () => {
+    try {
+      const storedSettings = localStorage.getItem(REPO_SETTINGS_KEY);
+      if (storedSettings) {
+        const { owner, repo, perPage } = JSON.parse(storedSettings);
+        return (
+          owner !== repoOwner || repo !== repoName || perPage !== itemsPerPage
+        );
+      }
+      return true; // If no stored settings, consider it changed
+    } catch {
+      return true; // If error parsing, consider it changed
+    }
+  };
+
   const registerGenerateFunction = (
     id: string,
     generateFn: () => Promise<void>
@@ -360,6 +412,7 @@ export default function Home() {
       localStorage.removeItem(PR_STORAGE_KEY);
       localStorage.removeItem(PAGINATION_KEY);
       localStorage.removeItem(STREAMING_STORAGE_KEY);
+      localStorage.removeItem(REPO_SETTINGS_KEY);
       console.log("Cleared all data from localStorage");
     }
 
@@ -371,8 +424,11 @@ export default function Home() {
     setError(null);
     setInitialFetchDone(false);
     setExpandButtonVisible(false);
-    setGenerateButtonVisible(false);
     setLoadMoreButtonVisible(false);
+    // Reset repo settings to defaults
+    setRepoOwner("openai");
+    setRepoName("openai-node");
+    setItemsPerPage(10);
     generateFunctionsRef.current.clear();
 
     console.log("Reset complete - all PRs and state cleared");
@@ -380,39 +436,295 @@ export default function Home() {
 
   return (
     <main className="flex min-h-screen flex-col items-center p-12 sm:p-24">
-      <h1 className="text-4xl font-bold mb-3">Diff Digest ✍️</h1>
-      <h1 className="text-lg text-gray-500 mb-12">
-        Made w/ love by{" "}
+      <h1 className="text-4xl font-bold mb-2">Diff Digest</h1>
+      <p className="text-xl text-gray-600 dark:text-gray-400 mb-3">
+        AI-powered PR analysis & code change summarization
+      </p>
+
+      <div className="flex items-center text-md text-gray-500 mb-10">
+        <span>Made w/ </span>
+        <span className="text-red-500 mx-1">♥</span>
+        <span>by</span>
         <a
           href="https://linkedin.com/in/colinchambachan"
           target="_blank"
           rel="noopener noreferrer"
-          className="text-blue-600 hover:text-blue-800 underline decoration-2 underline-offset-4"
+          className="text-blue-600 hover:text-blue-800 underline decoration-2 underline-offset-4 ml-1 flex items-center"
         >
           Colin
-          <ExternalLink className="h-4 w-4 inline-block ms-1" />
-        </a>{" "}
-        :D
-      </h1>
+          <ExternalLink className="h-3.5 w-3.5 inline-block ml-0.5" />
+        </a>
+      </div>
 
       <div className="w-full max-w-4xl">
-        {/* Controls Section */}
-        <div className="mb-8 flex space-x-4">
-          <button
-            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors disabled:opacity-50 cursor-pointer"
-            onClick={handleFetchClick}
-            disabled={isLoading}
-          >
-            {isLoading && currentPage === 1
-              ? "Fetching..."
-              : "Fetch Latest Diffs"}
-          </button>
+        {/* Repo Settings Section */}
+        <div className="mb-8 p-6 border border-gray-300 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-800 shadow-sm transition-all duration-300 hover:shadow-md">
+          <h2 className="text-xl font-semibold mb-6 flex items-center">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="mr-2 text-blue-600"
+            >
+              <path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"></path>
+              <path d="M9 18c-4.51 2-5-2-7-2"></path>
+            </svg>
+            Repository Settings
+          </h2>
+          <div className="flex flex-wrap gap-3 mb-6">
+            <div className="group flex-1 min-w-[220px]">
+              <label
+                htmlFor="repoOwner"
+                className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 transition-colors group-hover:text-blue-600 dark:group-hover:text-blue-400"
+              >
+                Owner
+              </label>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path>
+                    <circle cx="12" cy="7" r="4"></circle>
+                  </svg>
+                </div>
+                <input
+                  id="repoOwner"
+                  type="text"
+                  value={repoOwner}
+                  onChange={(e) => setRepoOwner(e.target.value)}
+                  className="w-full pl-10 px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-gray-700 transition-all duration-200"
+                  placeholder="e.g. openai"
+                />
+              </div>
+            </div>
+            <div className="group flex-1 min-w-[220px]">
+              <label
+                htmlFor="repoName"
+                className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 transition-colors group-hover:text-blue-600 dark:group-hover:text-blue-400"
+              >
+                Repository
+              </label>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M3 3v18h18"></path>
+                    <path d="M18.4 3a1.8 1.8 0 0 0-1.8 1.8v10.8"></path>
+                    <path d="M8.4 3a1.8 1.8 0 0 1 1.8 1.8v10.8"></path>
+                    <path d="M13.5 7.5 18 3"></path>
+                    <path d="M13.5 7.5 9 3"></path>
+                    <path d="M10 19v-6.3a1.8 1.8 0 0 1 3.6 0V19"></path>
+                  </svg>
+                </div>
+                <input
+                  id="repoName"
+                  type="text"
+                  value={repoName}
+                  onChange={(e) => setRepoName(e.target.value)}
+                  className="w-full pl-10 px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-gray-700 transition-all duration-200"
+                  placeholder="e.g. openai-node"
+                />
+              </div>
+            </div>
+            <div className="group w-[180px]">
+              <label
+                htmlFor="itemsPerPage"
+                className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 transition-colors hover:text-blue-600 dark:hover:text-blue-400"
+              >
+                Items Per Page
+              </label>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M9 21v-6"></path>
+                    <path d="M15 15v6"></path>
+                    <path d="M4 7V3h16v4"></path>
+                    <path d="M3 7h5l2 2 2-2h5v5l-2 2 2 2v5h-5l-2-2-2 2H3v-5l2-2-2-2Z"></path>
+                  </svg>
+                </div>
+                <select
+                  id="itemsPerPage"
+                  value={itemsPerPage}
+                  onChange={(e) => setItemsPerPage(Number(e.target.value))}
+                  className="w-full pl-10 px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-gray-700 appearance-none cursor-pointer transition-all duration-200"
+                >
+                  <option value="5">5 items</option>
+                  <option value="10">10 items</option>
+                  <option value="15">15 items</option>
+                  <option value="20">20 items</option>
+                  <option value="25">25 items</option>
+                </select>
+                <div className="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
+                  <svg
+                    className="w-4 h-4 text-gray-400"
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 20 20"
+                    fill="currentColor"
+                    aria-hidden="true"
+                  >
+                    <path
+                      fillRule="evenodd"
+                      d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
+                      clipRule="evenodd"
+                    />
+                  </svg>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-3 justify-between mt-8">
+            <button
+              className="px-5 py-2.5 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 dark:focus:ring-offset-gray-800 transition-all duration-200 shadow-sm hover:shadow flex items-center"
+              onClick={() => {
+                // Check if repo owner or name has changed
+                const storedSettings = localStorage.getItem(REPO_SETTINGS_KEY);
+                let shouldClearData = false;
+
+                if (storedSettings) {
+                  const { owner, repo, perPage } = JSON.parse(storedSettings);
+                  // If either owner or repo has changed, we should clear data
+                  if (
+                    owner !== repoOwner ||
+                    repo !== repoName ||
+                    perPage !== itemsPerPage
+                  ) {
+                    shouldClearData = true;
+                  }
+                }
+
+                // Clear data if repo changed
+                if (shouldClearData) {
+                  localStorage.removeItem(PR_STORAGE_KEY);
+                  localStorage.removeItem(PAGINATION_KEY);
+                  localStorage.removeItem(STREAMING_STORAGE_KEY);
+
+                  // Reset diff-related state
+                  setDiffs([]);
+                  setOpenDiffIds(new Set());
+                  setNextPage(null);
+                  setCurrentPage(1);
+                  setInitialFetchDone(false);
+                  generateFunctionsRef.current.clear();
+                  console.log("Repository changed - cleared previous data");
+                }
+
+                // Save the new settings and fetch
+                saveRepoSettings(repoOwner, repoName, itemsPerPage);
+                handleFetchClick();
+              }}
+              disabled={isLoading}
+            >
+              {isLoading ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  <span className="whitespace-nowrap">Fetching...</span>
+                </>
+              ) : initialFetchDone && !settingsHaveChanged() ? (
+                <>
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  <span className="whitespace-nowrap">Refresh</span>
+                </>
+              ) : (
+                <span className="whitespace-nowrap">Fetch Diffs</span>
+              )}
+            </button>
+            <button
+              className="px-5 py-2.5 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-md hover:bg-gray-300 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 dark:focus:ring-offset-gray-800 transition-all duration-200 shadow-sm hover:shadow flex items-center"
+              onClick={() => {
+                // Check if repo settings have changed from current values
+                const hasChanged =
+                  repoOwner !== "openai" ||
+                  repoName !== "openai-node" ||
+                  itemsPerPage !== 10;
+
+                // Clear data if settings changed
+                if (hasChanged) {
+                  localStorage.removeItem(PR_STORAGE_KEY);
+                  localStorage.removeItem(PAGINATION_KEY);
+                  localStorage.removeItem(STREAMING_STORAGE_KEY);
+
+                  // Reset diff-related state
+                  setDiffs([]);
+                  setOpenDiffIds(new Set());
+                  setNextPage(null);
+                  setCurrentPage(1);
+                  setInitialFetchDone(false);
+                  setExpandButtonVisible(false);
+                  setLoadMoreButtonVisible(false);
+                  generateFunctionsRef.current.clear();
+                  console.log("Reset to defaults - cleared previous data");
+                }
+
+                // Reset repository settings
+                setRepoOwner("openai");
+                setRepoName("openai-node");
+                setItemsPerPage(10);
+                saveRepoSettings("openai", "openai-node", 10);
+              }}
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="mr-2"
+              >
+                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
+                <path d="M3 3v5h5"></path>
+              </svg>
+              Reset to Defaults
+            </button>
+          </div>
         </div>
 
         {/* Results Section */}
         <div className="border border-gray-300 dark:border-gray-700 rounded-lg p-6 min-h-[300px] bg-gray-50 dark:bg-gray-800">
           <div className="flex justify-between items-center mb-4">
-            <h2 className="text-2xl font-semibold">Merged Pull Requests</h2>
+            <h2 className="text-2xl font-semibold flex items-center">
+              Merged Pull Requests
+              {isLoading && currentPage === 1 && (
+                <Loader2 className="ml-3 h-5 w-5 animate-spin text-blue-600" />
+              )}
+            </h2>
 
             {diffs.length > 0 && (
               <div className="flex space-x-2">
@@ -464,15 +776,24 @@ export default function Home() {
 
                 <button
                   className={`flex items-center px-4 py-1.5 text-sm bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-70 disabled:hover:bg-purple-600 transition-all duration-500 ease-in-out cursor-pointer ${
-                    generateButtonVisible
+                    expandButtonVisible
                       ? "opacity-100 translate-y-0"
                       : "opacity-0 translate-y-4"
                   }`}
                   onClick={handleGenerateAll}
                   disabled={isGeneratingAll}
                 >
-                  <Sparkles className="h-4 w-4 mr-1.5" />
-                  {isGeneratingAll ? "Generating..." : "Generate All Notes"}
+                  {isGeneratingAll ? (
+                    <>
+                      <RefreshCw className="h-4 w-4 mr-1.5 animate-spin" />
+                      Generating {generationProgress}/{generationTotal}
+                    </>
+                  ) : (
+                    <>
+                      <Zap className="h-4 w-4 mr-1.5" />
+                      Generate All
+                    </>
+                  )}
                 </button>
               </div>
             )}
@@ -556,7 +877,7 @@ export default function Home() {
                 {isLoading
                   ? "Loading..."
                   : `Load More (Page ${
-                      nextPage || Math.floor(diffs.length / 10) + 1
+                      nextPage || Math.floor(diffs.length / itemsPerPage) + 1
                     })`}
               </button>
             </div>

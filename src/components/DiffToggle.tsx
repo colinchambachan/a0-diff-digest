@@ -5,6 +5,8 @@ import {
   RefreshCw,
   Copy,
   Check,
+  ExternalLink,
+  Zap,
 } from "lucide-react";
 import {
   savePR,
@@ -516,32 +518,61 @@ export default function DiffToggle({
       }`}
     >
       <div
-        className="flex items-center p-3 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors rounded-lg"
+        className="flex items-center p-4 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors rounded-lg"
         onClick={handleToggle}
       >
-        <div className="mr-2 transition-transform duration-300">
+        <div className="mr-3 transition-transform duration-300">
           {isOpen ? (
             <ChevronDown className="h-5 w-5 text-gray-500" />
           ) : (
             <ChevronRight className="h-5 w-5 text-gray-500" />
           )}
         </div>
-        <div className="flex-1 flex items-center">
-          <div className="flex items-center">
+        <div className="flex-1 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center mr-2">
             <a
               href={url}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-blue-600 dark:text-blue-400 hover:underline mr-2"
+              className="text-blue-600 dark:text-blue-400 hover:underline mr-2 flex items-center"
               onClick={(e) => e.stopPropagation()}
             >
               PR #{id}:
+              <ExternalLink className="h-3 w-3 ml-1" />
             </a>
             {isGenerating && (
               <RefreshCw className="animate-spin h-3.5 w-3.5 text-purple-600 dark:text-purple-400 mr-2" />
             )}
+            <span className="line-clamp-1">{description}</span>
           </div>
-          <span>{description}</span>
+
+          {!isGenerating && (
+            <button
+              className={`ml-2 px-3 py-1.5 w-28 text-center flex items-center justify-center ${
+                notes || partialNotes.developer
+                  ? "bg-gray-500 hover:bg-gray-600"
+                  : "bg-purple-600 hover:bg-purple-700"
+              } text-white text-sm rounded transition-colors cursor-pointer`}
+              onClick={(e) => {
+                e.stopPropagation();
+                // Set the toggle to open when generating notes
+                if (!isOpen) {
+                  setInternalIsOpen(true);
+                  if (onToggle) onToggle(true);
+                }
+                generateNotes();
+              }}
+            >
+              {notes || partialNotes.developer ? (
+                "Regenerate"
+              ) : (
+                <>
+                  <Zap className="h-3.5 w-3.5 mr-1.5" />
+                  Generate
+                </>
+              )}
+            </button>
+          )}
         </div>
       </div>
 
@@ -556,18 +587,6 @@ export default function DiffToggle({
           ref={contentRef}
           className="p-4 border-t border-gray-200 dark:border-gray-700"
         >
-          {!notes && !isGenerating && !error && (
-            <button
-              className="mb-4 px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 transition-colors cursor-pointer"
-              onClick={(e) => {
-                e.stopPropagation();
-                generateNotes();
-              }}
-            >
-              Generate Release Notes
-            </button>
-          )}
-
           {isGenerating && (
             <div className="flex items-center mb-4 text-gray-600 dark:text-gray-400">
               <RefreshCw className="animate-spin h-4 w-4 mr-2" />
@@ -582,6 +601,11 @@ export default function DiffToggle({
                 className="ml-4 px-2 py-1 bg-red-200 dark:bg-red-800 rounded text-sm cursor-pointer"
                 onClick={(e) => {
                   e.stopPropagation();
+                  // Ensure toggle stays open when retrying
+                  if (!isOpen) {
+                    setInternalIsOpen(true);
+                    if (onToggle) onToggle(true);
+                  }
                   generateNotes();
                 }}
               >
@@ -644,20 +668,6 @@ export default function DiffToggle({
               </p>
             </div>
           </div>
-
-          {(notes || (partialNotes.developer && !isGenerating)) && (
-            <div className="mt-4 flex justify-end">
-              <button
-                className="px-3 py-1 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded text-sm hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors cursor-pointer"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  generateNotes();
-                }}
-              >
-                Regenerate
-              </button>
-            </div>
-          )}
         </div>
       </div>
     </div>
